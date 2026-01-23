@@ -60,7 +60,29 @@ See `bench.py` for benchmark.
 | vLLM           | 133,966     | 98.37    | 1361.84               |
 | Nano-vLLM      | 133,966     | 93.41    | 1434.13               |
 
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=GeeeekExplorer/nano-vllm&type=Date)](https://www.star-history.com/#GeeeekExplorer/nano-vllm&Date)
+## Project Structure
+```
+nanovllm/
+├── engine/                   #   推理引擎核心
+│   ├── llm_engine.py         #   └── 总协调器，驱动整个推理流程
+│   ├── scheduler.py          #   └── 智能调度器，决定执行顺序
+│   ├── block_manager.py      #   └── KV缓存内存管理 (PagedAttention核心)
+│   ├── model_runner.py       #   └── 单GPU上的模型执行器
+│   └── sequence.py           #   └── 请求序列的数据结构
+├── layers/                   #   神经网络层实现
+│   ├── attention.py          #   └── FlashAttention + KV Cache management
+│   ├── sampler.py            #   └── 从logits采样生成token
+│   ├── linear.py             #   └── 支持张量并行的线性层
+│   ├── layernorm.py          #   └── RMS LayerNorm
+│   ├── rotary_embedding.py   #   └── 旋转位置编码 (RoPE)
+│   ├── activation.py         #   └── 激活函数 (SiLU)
+│   └── embed_head.py         #   └── 词嵌入和语言模型头
+├── models/                   #  ️ 具体模型架构
+│   └── qwen3.py              #   └── Qwen3模型完整实现
+├── utils/                    #   工具模块
+│   ├── context.py            #   └── 全局上下文状态管理
+│   └── loader.py             #   └── 模型权重加载器
+├── config.py                 #   配置管理
+├── llm.py                    #   Entrypoint -> LLMEngine
+└── sampling_params.py        #   采样参数定义
+```

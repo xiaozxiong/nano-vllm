@@ -15,19 +15,28 @@ from nanovllm.engine.model_runner import ModelRunner
 class LLMEngine:
 
     def __init__(self, model, **kwargs):
+        # gather config field
         config_fields = {field.name for field in fields(Config)}
+        # collect eligible cofing
         config_kwargs = {k: v for k, v in kwargs.items() if k in config_fields}
+        # config class for model
         config = Config(model, **config_kwargs)
-        self.ps = []
-        self.events = []
-        ctx = mp.get_context("spawn")
+        print("Used config: ", config_kwargs)
+        #* tensor parallelism
+        self.ps = [] # keep track of working process
+        self.events = [] # 
+        ctx = mp.get_context("spawn") # multiprocessing context
         for i in range(1, config.tensor_parallel_size):
             event = ctx.Event()
+            # create a worker process, child process, (rank > 0)
             process = ctx.Process(target=ModelRunner, args=(config, i, event))
+            # process executes
             process.start()
             self.ps.append(process)
             self.events.append(event)
-        self.model_runner = ModelRunner(config, 0, self.events)
+        #* rank0
+        self.model_runner = ModelRunner(config, 0, self.events) # rank0
+
         self.tokenizer = AutoTokenizer.from_pretrained(config.model, use_fast=True)
         config.eos = self.tokenizer.eos_token_id
         self.scheduler = Scheduler(config)
@@ -66,13 +75,18 @@ class LLMEngine:
             pbar = tqdm(total=len(prompts), desc="Generating", dynamic_ncols=True)
         if not isinstance(sampling_params, list):
             sampling_params = [sampling_params] * len(prompts)
+        #* add request into waiting queue of scheduler
         for prompt, sp in zip(prompts, sampling_params):
             self.add_request(prompt, sp)
+            print(f"prompt: {prompt}")
+        
         outputs = {}
         prefill_throughput = decode_throughput = 0.
+
+        #* ask scheduler if both waiting queue and running queue are empty
         while not self.is_finished():
             t = perf_counter()
-            output, num_tokens = self.step()
+            output, num_tokens = self.step() #!
             if use_tqdm:
                 if num_tokens > 0:
                     prefill_throughput = num_tokens / (perf_counter() - t)
@@ -86,6 +100,7 @@ class LLMEngine:
                 outputs[seq_id] = token_ids
                 if use_tqdm:
                     pbar.update(1)
+        
         outputs = [outputs[seq_id] for seq_id in sorted(outputs.keys())]
         outputs = [{"text": self.tokenizer.decode(token_ids), "token_ids": token_ids} for token_ids in outputs]
         if use_tqdm:
