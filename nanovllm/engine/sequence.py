@@ -4,7 +4,7 @@ from itertools import count
 
 from nanovllm.sampling_params import SamplingParams
 
-
+# request status
 class SequenceStatus(Enum):
     WAITING = auto()
     RUNNING = auto()
@@ -12,18 +12,18 @@ class SequenceStatus(Enum):
 
 
 class Sequence:
-    block_size = 256
-    counter = count()
+    block_size = 256 # tokens per page
+    counter = count() # start from 0
 
     def __init__(self, token_ids: list[int], sampling_params = SamplingParams()):
         self.seq_id = next(Sequence.counter)
         self.status = SequenceStatus.WAITING
-        self.token_ids = copy(token_ids)
+        self.token_ids = copy(token_ids) # list of tokens
         self.last_token = token_ids[-1]
         self.num_tokens = len(self.token_ids)
         self.num_prompt_tokens = len(token_ids)
-        self.num_cached_tokens = 0
-        self.block_table = []
+        self.num_cached_tokens = 0 #!
+        self.block_table = [] #!
         self.temperature = sampling_params.temperature
         self.max_tokens = sampling_params.max_tokens
         self.ignore_eos = sampling_params.ignore_eos

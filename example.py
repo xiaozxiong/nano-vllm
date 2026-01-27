@@ -2,7 +2,7 @@ import os
 from nanovllm import LLM, SamplingParams
 from transformers import AutoTokenizer
 
-os.environ['CUDA_VISIBLE_DEVICES'] = "0,7"
+os.environ['CUDA_VISIBLE_DEVICES'] = "0,1"
 
 def main():
     # path = os.path.expanduser("~/huggingface/Qwen3-0.6B/")
@@ -12,7 +12,7 @@ def main():
         path,
         enforce_eager=True,
         tensor_parallel_size=2,
-        gpu_memory_utilization=0.7,
+        gpu_memory_utilization=0.9,
         max_model_len=2048,
     )
 
@@ -20,6 +20,11 @@ def main():
     prompts = [
         "introduce yourself",
         "list all prime numbers within 100",
+        "introduce fitness",
+        "how to enhance programming skills",
+        "how about mini",
+        "introduce shandong university",
+        "compute 1+2",
     ]
     # apply template to prompts
     prompts = [

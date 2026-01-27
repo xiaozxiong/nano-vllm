@@ -54,10 +54,16 @@ class ParallelLMHead(VocabParallelEmbedding):
         super().__init__(num_embeddings, embedding_dim)
 
     def forward(self, x: torch.Tensor):
-        context = get_context()
+        # x: [num_total_tokens, hidden_size]
+        print(f"--- ParallelLMHead: run ParallelLMHead with hidden_state, shape of x: {x.shape}")
+        context = get_context() # obtain global settings
+        #* keep the state of the last token
         if context.is_prefill:
-            last_indices = context.cu_seqlens_q[1:] - 1
+            last_indices = context.cu_seqlens_q[1:] - 1 # the last token of each seq
+            # select tokens indicated by last_indices and store in continuos memory
             x = x[last_indices].contiguous()
+        # x: [bs, hidden_size]
+        print(f"--- ParallelLMHead: new x shape: {x.shape}")
         logits = F.linear(x, self.weight)
         if self.tp_size > 1:
             all_logits = [torch.empty_like(logits) for _ in range(self.tp_size)] if self.tp_rank == 0 else None

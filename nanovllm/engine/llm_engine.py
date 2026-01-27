@@ -48,18 +48,27 @@ class LLMEngine:
         for p in self.ps:
             p.join()
 
+    #* convert text prompt into tokens
     def add_request(self, prompt: str | list[int], sampling_params: SamplingParams):
+        print(f"--- prompt: {prompt}")
         if isinstance(prompt, str):
             prompt = self.tokenizer.encode(prompt)
+        print(f"--- token_ids of prompt = {prompt}\n")
         seq = Sequence(prompt, sampling_params)
         self.scheduler.add(seq)
-
+    #!
     def step(self):
         seqs, is_prefill = self.scheduler.schedule()
+        print(f"--- the number of scheduled seqs: {len(seqs)}")
+        print(f"--- schedulted seq id = {[seq.seq_id for seq in seqs]}")
+        #! run
         token_ids = self.model_runner.call("run", seqs, is_prefill)
+
         self.scheduler.postprocess(seqs, token_ids)
+
         outputs = [(seq.seq_id, seq.completion_token_ids) for seq in seqs if seq.is_finished]
         num_tokens = sum(len(seq) for seq in seqs) if is_prefill else -len(seqs)
+        
         return outputs, num_tokens
 
     def is_finished(self):
@@ -76,17 +85,22 @@ class LLMEngine:
         if not isinstance(sampling_params, list):
             sampling_params = [sampling_params] * len(prompts)
         #* add request into waiting queue of scheduler
+        print(f"--- length of sampling_params: {len(sampling_params)}")
         for prompt, sp in zip(prompts, sampling_params):
             self.add_request(prompt, sp)
-            print(f"prompt: {prompt}")
         
-        outputs = {}
+        outputs = {} # {1: [], 2: []}
         prefill_throughput = decode_throughput = 0.
 
         #* ask scheduler if both waiting queue and running queue are empty
+        step_count = 0
+        print("--------------------------------- start generation -------------------------")
         while not self.is_finished():
             t = perf_counter()
-            output, num_tokens = self.step() #!
+            #! generate one token for each scheduled seq
+            #! the number of scheduled seqs depends on memory capacity
+            print(f"==== step#{step_count} ====")
+            output, num_tokens = self.step()
             if use_tqdm:
                 if num_tokens > 0:
                     prefill_throughput = num_tokens / (perf_counter() - t)
@@ -97,11 +111,18 @@ class LLMEngine:
                     "Decode": f"{int(decode_throughput)}tok/s",
                 })
             for seq_id, token_ids in output:
+                # store output token to corresponding sequence
+                print(f"--- number of tokens of seq#{seq_id} per step: {len(token_ids)}")
                 outputs[seq_id] = token_ids
                 if use_tqdm:
                     pbar.update(1)
+
+            step_count += 1
         
+        print(f"--- output: length = {len(outputs)}, {outputs}\n")
+        # sort sequences (request) by their id, a sequence is a request
         outputs = [outputs[seq_id] for seq_id in sorted(outputs.keys())]
+        # convert token ids back into text
         outputs = [{"text": self.tokenizer.decode(token_ids), "token_ids": token_ids} for token_ids in outputs]
         if use_tqdm:
             pbar.close()

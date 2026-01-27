@@ -95,12 +95,14 @@ class ModelRunner:
         self.shm.buf[4 : n + 4] = data
         for event in self.event:
             event.set()
-
+    #* call specific method
     def call(self, method_name, *args):
         if self.world_size > 1 and self.rank == 0:
             self.write_shm(method_name, *args)
+        # find a method with specific name
+        # method = self.method_name
         method = getattr(self, method_name, None)
-        return method(*args)
+        return method(*args) # invoke this method
 
     def warmup_model(self):
         print("--- warm up")
@@ -159,6 +161,7 @@ class ModelRunner:
             // block_bytes
         )
         assert config.num_kvcache_blocks > 0
+        print(f"--- num_blocks = {config.num_kvcache_blocks}")
         # memory pool
         self.kv_cache = torch.empty(
             2,
@@ -177,6 +180,9 @@ class ModelRunner:
                 layer_id += 1
 
     def prepare_block_tables(self, seqs: list[Sequence]):
+        """
+        Expand block tables to max len
+        """
         max_len = max(len(seq.block_table) for seq in seqs)
         block_tables = [
             seq.block_table + [-1] * (max_len - len(seq.block_table)) for seq in seqs
@@ -187,19 +193,23 @@ class ModelRunner:
         return block_tables
 
     def prepare_prefill(self, seqs: list[Sequence]):
-        input_ids = []
-        positions = []
+        input_ids = [] # tokens feed into the model
+        positions = [] # positions within each seq
+        # prefix-sum offsets
         cu_seqlens_q = [0]
         cu_seqlens_k = [0]
+
         max_seqlen_q = 0
         max_seqlen_k = 0
-        slot_mapping = []
+        slot_mapping = [] # tell attention where KV blocks live in memory
         block_tables = None
         # for each sequence
         for seq in seqs:
             seqlen = len(seq)
+            # Seq: [ cached | new tokens ]
             input_ids.extend(seq[seq.num_cached_tokens :])
             positions.extend(list(range(seq.num_cached_tokens, seqlen)))
+
             seqlen_q = seqlen - seq.num_cached_tokens
             seqlen_k = seqlen
             cu_seqlens_q.append(cu_seqlens_q[-1] + seqlen_q)
@@ -208,6 +218,7 @@ class ModelRunner:
             max_seqlen_k = max(seqlen_k, max_seqlen_k)
             if not seq.block_table:  # warmup
                 continue
+            # build slot mapping
             for i in range(seq.num_cached_blocks, seq.num_blocks):
                 start = seq.block_table[i] * self.block_size
                 if i != seq.num_blocks - 1:
@@ -215,8 +226,10 @@ class ModelRunner:
                 else:
                     end = start + seq.last_block_num_tokens
                 slot_mapping.extend(list(range(start, end)))
+        
         if cu_seqlens_k[-1] > cu_seqlens_q[-1]:  # prefix cache
             block_tables = self.prepare_block_tables(seqs)
+        
         input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(
             non_blocking=True
         )
@@ -232,6 +245,7 @@ class ModelRunner:
         slot_mapping = torch.tensor(
             slot_mapping, dtype=torch.int32, pin_memory=True
         ).cuda(non_blocking=True)
+        # metadata for attention computation
         set_context(
             True,
             cu_seqlens_q,
@@ -290,11 +304,16 @@ class ModelRunner:
     def run_model(
         self, input_ids: torch.Tensor, positions: torch.Tensor, is_prefill: bool
     ):
+        #* without cuda graph
+        # e.g., model = Qwen3ForCausalLM
+        # self.model() -> Qwen3ForCausalLM.forward
         if is_prefill or self.enforce_eager or input_ids.size(0) > 512:
             return self.model.compute_logits(self.model(input_ids, positions))
+        #* with cuda graph
         else:
             bs = input_ids.size(0)
-            context = get_context()
+            context = get_context() # obtain metadata set in preparation
+            # Picks the smallest graph that can fit bs
             graph = self.graphs[next(x for x in self.graph_bs if x >= bs)]
             graph_vars = self.graph_vars
             graph_vars["input_ids"][:bs] = input_ids
@@ -306,22 +325,36 @@ class ModelRunner:
             graph_vars["block_tables"][
                 :bs, : context.block_tables.size(1)
             ] = context.block_tables
+            
+            #* Executes the captured CUDA graph
             graph.replay()
+            #! compute
             return self.model.compute_logits(graph_vars["outputs"][:bs])
 
     #* runs one model step
     def run(self, seqs: list[Sequence], is_prefill: bool) -> list[int]:
-        #? Prepare inputs
+        #* Prepare inputs
         # prefill: input_ids: [batch_size, seq_len], positions: [batch_size, seq_len]
+        #          length = sum(len(seq)), length = sum(len(seq))
         # decode: input_ids: [batch_size, 1], positions: [batch_size, 1]
+        # shape = (bs, ), shape = (bs, )
         input_ids, positions = (
             self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
         )
-        # only rank0
+        print(f"--- input_ids shape = {input_ids.shape}, positions shape = {positions.shape}")
+        # only rank0, get temperature list for seqs
         temperatures = self.prepare_sample(seqs) if self.rank == 0 else None
+        
         # all ranks execute this
+        #? perform all-gather to get the final result
+        #? This ensures that the final probability distribution (logits) for the next token is assembled 
+        #? from the shards and available (at least) to Rank 0.
+        # logits: (batch_size, the vocabulary size) e.g., (7, 151936)
         logits = self.run_model(input_ids, positions, is_prefill)
+        
         # sample next token, only rank0
+        #* Select the token with highest score in the vocabulary
+        print(f"--- finish computing logits, select token_id...")
         token_ids = (
             self.sampler(logits, temperatures).tolist() if self.rank == 0 else None
         )

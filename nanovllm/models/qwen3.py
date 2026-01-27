@@ -29,7 +29,7 @@ class Qwen3Attention(nn.Module):
         tp_size = dist.get_world_size()
         self.total_num_heads = num_heads
         assert self.total_num_heads % tp_size == 0
-        self.num_heads = self.total_num_heads // tp_size
+        self.num_heads = self.total_num_heads // tp_size # heads belonged to current device
         self.total_num_kv_heads = num_kv_heads
         assert self.total_num_kv_heads % tp_size == 0
         self.num_kv_heads = self.total_num_kv_heads // tp_size
@@ -38,7 +38,7 @@ class Qwen3Attention(nn.Module):
         self.kv_size = self.num_kv_heads * self.head_dim
         self.scaling = self.head_dim ** -0.5
         self.qkv_bias = qkv_bias
-
+        
         self.qkv_proj = QKVParallelLinear(
             hidden_size,
             self.head_dim,
@@ -73,16 +73,21 @@ class Qwen3Attention(nn.Module):
         positions: torch.Tensor,
         hidden_states: torch.Tensor,
     ) -> torch.Tensor:
+        # get q, k, v
         qkv = self.qkv_proj(hidden_states)
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
         q = q.view(-1, self.num_heads, self.head_dim)
         k = k.view(-1, self.num_kv_heads, self.head_dim)
         v = v.view(-1, self.num_kv_heads, self.head_dim)
+        # apply RMSNorm to q and k (optional)
         if not self.qkv_bias:
             q = self.q_norm(q)
             k = self.k_norm(k)
+        # apply rotary embeding
         q, k = self.rotary_emb(positions, q, k)
+        # compute
         o = self.attn(q, k, v)
+        # project output
         output = self.o_proj(o.flatten(1, -1))
         return output
 
@@ -174,11 +179,15 @@ class Qwen3Model(nn.Module):
         input_ids: torch.Tensor,
         positions: torch.Tensor,
     ) -> torch.Tensor:
+        # translate integer token ids into dense vectors
+        print(f"--- Qwen3Model: translate token_ids into dense vectors")
         hidden_states = self.embed_tokens(input_ids)
         residual = None
+        print(f"--- Qwen3Model: iterating layers")
         for layer in self.layers:
             hidden_states, residual = layer(positions, hidden_states, residual)
         hidden_states, _ = self.norm(hidden_states, residual)
+        print(f"--- Qwen3Model: hidden_states shape after layers = {hidden_states.shape}")
         return hidden_states
 
 
@@ -197,7 +206,9 @@ class Qwen3ForCausalLM(nn.Module):
     ) -> None:
         super().__init__()
         self.model = Qwen3Model(config)
+        #!
         self.lm_head = ParallelLMHead(config.vocab_size, config.hidden_size)
+        
         if config.tie_word_embeddings:
             self.lm_head.weight.data = self.model.embed_tokens.weight.data
 
@@ -206,10 +217,12 @@ class Qwen3ForCausalLM(nn.Module):
         input_ids: torch.Tensor,
         positions: torch.Tensor,
     ) -> torch.Tensor:
+        print(f"--- Qwen3ForCausalLM: Qwen3Model forward - input_ids: {input_ids.shape}, positions: {positions.shape}")
         return self.model(input_ids, positions)
 
     def compute_logits(
         self,
         hidden_states: torch.Tensor,
     ) -> torch.Tensor:
+        print(f"--- Qwen3ForCausalLM: compute_logits, hidden_states shape = {hidden_states.shape}")
         return self.lm_head(hidden_states)
