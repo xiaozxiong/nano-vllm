@@ -105,7 +105,7 @@ class ModelRunner:
         return method(*args) # invoke this method
 
     def warmup_model(self):
-        print("--- warm up")
+        print("------ warm up model -------")
         torch.cuda.empty_cache()  # Releases cached GPU memory
         torch.cuda.reset_peak_memory_stats()  # Resets max-memory tracking
 
@@ -123,7 +123,7 @@ class ModelRunner:
         )
 
         self.run(seqs, True)
-        print("--- finish warm up")
+        print("------ Finish warming up ------")
         torch.cuda.empty_cache()
 
     def allocate_kv_cache(self):

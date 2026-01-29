@@ -36,7 +36,7 @@ class LLMEngine:
             self.events.append(event)
         #* rank0
         self.model_runner = ModelRunner(config, 0, self.events) # rank0
-
+        # CPU-side, load tokenizer settings (text -> token_id)
         self.tokenizer = AutoTokenizer.from_pretrained(config.model, use_fast=True)
         config.eos = self.tokenizer.eos_token_id
         self.scheduler = Scheduler(config)
@@ -50,10 +50,10 @@ class LLMEngine:
 
     #* convert text prompt into tokens
     def add_request(self, prompt: str | list[int], sampling_params: SamplingParams):
-        print(f"--- prompt: {prompt}")
+        print(f"--- prompt text: {prompt}")
         if isinstance(prompt, str):
             prompt = self.tokenizer.encode(prompt)
-        print(f"--- token_ids of prompt = {prompt}\n")
+        print(f"--- prompt token_ids: {prompt}\n")
         seq = Sequence(prompt, sampling_params)
         self.scheduler.add(seq)
     #!
@@ -86,6 +86,7 @@ class LLMEngine:
             sampling_params = [sampling_params] * len(prompts)
         #* add request into waiting queue of scheduler
         print(f"--- length of sampling_params: {len(sampling_params)}")
+        print(f"--------------- adding requests({len(prompts)}) and tokenizer encoding ---------------")
         for prompt, sp in zip(prompts, sampling_params):
             self.add_request(prompt, sp)
         

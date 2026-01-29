@@ -24,7 +24,7 @@ def main():
         "how to enhance programming skills",
         "how about mini",
         "introduce shandong university",
-        "compute 1+2",
+        "compute 2+3",
     ]
     # apply template to prompts
     prompts = [

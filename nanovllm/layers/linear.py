@@ -139,6 +139,7 @@ class RowParallelLinear(LinearBase):
         tp_size = dist.get_world_size()
         super().__init__(divide(input_size, tp_size), output_size, bias, 1)
 
+    # weight shape: [(output_size), (input_size / tp_size)]
     def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
         param_data = param.data
         shard_size = param_data.size(self.tp_dim)

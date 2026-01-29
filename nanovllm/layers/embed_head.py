@@ -25,9 +25,11 @@ class VocabParallelEmbedding(nn.Module):
         self.weight.weight_loader = self.weight_loader
 
     def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
+        print(f"--- ParallelLMHead: weight_loader rank = {self.tp_rank}")
         param_data = param.data
         shard_size = param_data.size(0)
         start_idx = self.tp_rank * shard_size
+        # Slice the FULL weight to get only the part this GPU needs
         loaded_weight = loaded_weight.narrow(0, start_idx, shard_size)
         param_data.copy_(loaded_weight)
 
