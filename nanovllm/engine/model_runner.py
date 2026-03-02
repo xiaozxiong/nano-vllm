@@ -50,14 +50,15 @@ class ModelRunner:
             self.capture_cudagraph()
         torch.set_default_device("cpu")
         torch.set_default_dtype(default_dtype)
-        # shm is used for communication
+        #! shm is used for communication
         if self.world_size > 1:
             if rank == 0: # controller: scheduler, HTTP server
                 self.shm = SharedMemory(name="nanovllm", create=True, size=2**20)
-                dist.barrier()
+                dist.barrier() # sync
             else: # workers
-                dist.barrier()
-                self.shm = SharedMemory(name="nanovllm")
+                dist.barrier() # sync, weit for creation of shm
+                #* Attaches to existing shared memory
+                self.shm = SharedMemory(name="nanovllm")  # = shm in rank0
                 # They never leave this function until the application shuts down.
                 self.loop() # read content from shm
 
@@ -73,6 +74,7 @@ class ModelRunner:
         dist.destroy_process_group()
 
     def loop(self):
+        # Wait until rank-0 tells me what function to run, then run it.
         while True:
             method_name, args = self.read_shm()
             self.call(method_name, *args)
@@ -80,25 +82,38 @@ class ModelRunner:
                 break
 
     def read_shm(self):
+        # This function is only used by worker ranks
         assert self.world_size > 1 and self.rank > 0
+        # synchronization primitive, sleep until rank0 call event.set()
         self.event.wait()
+        # read message length
         n = int.from_bytes(self.shm.buf[0:4], "little")
+        # read method and arguments
         method_name, *args = pickle.loads(self.shm.buf[4 : n + 4])
+        # reset flag
         self.event.clear()
+        # return the command
         return method_name, args
-
+    #!
     def write_shm(self, method_name, *args):
+        # Only rank 0 writes commands
         assert self.world_size > 1 and self.rank == 0
+        # 
         data = pickle.dumps([method_name, *args])
         n = len(data)
         self.shm.buf[0:4] = n.to_bytes(4, "little")
         self.shm.buf[4 : n + 4] = data
+        # Wake all workers
         for event in self.event:
             event.set()
-    #* call specific method
+    
+    #! call the specific method across multi-processes
     def call(self, method_name, *args):
+        #* broadcast with Shared Memory (SHM)
         if self.world_size > 1 and self.rank == 0:
             self.write_shm(method_name, *args)
+        
+        #* local execution
         # find a method with specific name
         # method = self.method_name
         method = getattr(self, method_name, None)
@@ -173,7 +188,11 @@ class ModelRunner:
         )
         # assign kv cache
         layer_id = 0
+        # Iterate over all modules
         for module in self.model.modules():
+            # print(f"--- module: {module}")
+            # print(f"--- module: {dir(module)}")
+            # only select attention layer
             if hasattr(module, "k_cache") and hasattr(module, "v_cache"):
                 module.k_cache = self.kv_cache[0, layer_id]
                 module.v_cache = self.kv_cache[1, layer_id]
@@ -194,19 +213,20 @@ class ModelRunner:
 
     def prepare_prefill(self, seqs: list[Sequence]):
         input_ids = [] # tokens feed into the model
-        positions = [] # positions within each seq
+        positions = [] # positions within each seq for elements in input_ids
         # prefix-sum offsets
         cu_seqlens_q = [0]
         cu_seqlens_k = [0]
 
         max_seqlen_q = 0
         max_seqlen_k = 0
-        slot_mapping = [] # tell attention where KV blocks live in memory
+        slot_mapping = [] # address book: logical position -> physical position, tell attention where KV blocks live in memory
         block_tables = None
         # for each sequence
         for seq in seqs:
             seqlen = len(seq)
-            # Seq: [ cached | new tokens ]
+            # Seq: [ prefix cached | new tokens ]
+            #* only care about new tokens, prefix cache
             input_ids.extend(seq[seq.num_cached_tokens :])
             positions.extend(list(range(seq.num_cached_tokens, seqlen)))
 
@@ -220,14 +240,16 @@ class ModelRunner:
                 continue
             # build slot mapping
             for i in range(seq.num_cached_blocks, seq.num_blocks):
+                # Calculate physical start address for this block
                 start = seq.block_table[i] * self.block_size
                 if i != seq.num_blocks - 1:
                     end = start + self.block_size
                 else:
                     end = start + seq.last_block_num_tokens
+                # Add these physical addresses to the mapping
                 slot_mapping.extend(list(range(start, end)))
         
-        if cu_seqlens_k[-1] > cu_seqlens_q[-1]:  # prefix cache
+        if cu_seqlens_k[-1] > cu_seqlens_q[-1]:  # prefix cache exists
             block_tables = self.prepare_block_tables(seqs)
         
         input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(
@@ -333,6 +355,7 @@ class ModelRunner:
 
     #* runs one model step
     def run(self, seqs: list[Sequence], is_prefill: bool) -> list[int]:
+        print(f"--- run in rank{self.rank}")
         #* Prepare inputs
         # prefill: input_ids: [batch_size, seq_len], positions: [batch_size, seq_len]
         #          length = sum(len(seq)), length = sum(len(seq))

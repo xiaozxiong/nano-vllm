@@ -61,7 +61,7 @@ class LLMEngine:
         seqs, is_prefill = self.scheduler.schedule()
         print(f"--- the number of scheduled seqs: {len(seqs)}")
         print(f"--- schedulted seq id = {[seq.seq_id for seq in seqs]}")
-        #! run
+        #! run in multiple devices
         token_ids = self.model_runner.call("run", seqs, is_prefill)
 
         self.scheduler.postprocess(seqs, token_ids)

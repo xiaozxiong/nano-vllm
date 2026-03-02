@@ -54,16 +54,22 @@ class Attention(nn.Module):
         self.head_dim = head_dim
         self.scale = scale
         self.num_kv_heads = num_kv_heads
+        # empty since kv cache is allocated globally
         self.k_cache = self.v_cache = torch.tensor([])
 
     def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
+        # context contains slot_mapping, block_tables, ...
         context = get_context()
         k_cache, v_cache = self.k_cache, self.v_cache
+        # numel() tells the number of elements
         if k_cache.numel() and v_cache.numel():
             store_kvcache(k, v, k_cache, v_cache, context.slot_mapping)
         if context.is_prefill:
+            # The matching already happened earlier (outside the attention layer).
+            # block_tables is a result, not a trigger.
             if context.block_tables is not None:    # prefix cache
                 k, v = k_cache, v_cache
+            # print(f"--- Attention: prefill q.shape = {q.shape}, k.shape = {k.shape}")
             o = flash_attn_varlen_func(q, k, v,
                                        max_seqlen_q=context.max_seqlen_q, cu_seqlens_q=context.cu_seqlens_q,
                                        max_seqlen_k=context.max_seqlen_k, cu_seqlens_k=context.cu_seqlens_k,

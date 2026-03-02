@@ -9,8 +9,8 @@ class Block:
 
     def __init__(self, block_id):
         self.block_id = block_id
-        self.ref_count = 0
-        self.hash = -1
+        self.ref_count = 0 # how many sequences are using it
+        self.hash = -1 # fingerprint used to find duplicates
         self.token_ids = []
 
     def update(self, hash: int, token_ids: list[int]):
@@ -34,10 +34,10 @@ class BlockManager:
 
     @classmethod
     def compute_hash(cls, token_ids: list[int], prefix: int = -1):
-        h = xxhash.xxh64()
+        h = xxhash.xxh64() # create a 64-bit xxhash instance
         if prefix != -1:
-            h.update(prefix.to_bytes(8, "little"))
-        h.update(np.array(token_ids).tobytes())
+            h.update(prefix.to_bytes(8, "little")) # convert prefix into 8 bytes and update state
+        h.update(np.array(token_ids).tobytes()) # 
         return h.intdigest()
 
     def _allocate_block(self, block_id: int) -> Block:

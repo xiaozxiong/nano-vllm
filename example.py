@@ -22,8 +22,8 @@ def main():
         "list all prime numbers within 100",
         "introduce fitness",
         "how to enhance programming skills",
-        "how about mini",
-        "introduce shandong university",
+        "how to write a paper",
+        "introduce china",
         "compute 2+3",
     ]
     # apply template to prompts
