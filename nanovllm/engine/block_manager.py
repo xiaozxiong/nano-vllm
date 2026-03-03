@@ -28,9 +28,9 @@ class BlockManager:
     def __init__(self, num_blocks: int, block_size: int):
         self.block_size = block_size
         self.blocks: list[Block] = [Block(i) for i in range(num_blocks)]
-        self.hash_to_block_id: dict[int, int] = dict()
-        self.free_block_ids: deque[int] = deque(range(num_blocks))
-        self.used_block_ids: set[int] = set()
+        self.hash_to_block_id: dict[int, int] = dict() # hash table: hash value -> block_id
+        self.free_block_ids: deque[int] = deque(range(num_blocks)) # free block ids
+        self.used_block_ids: set[int] = set() # mark all used blocks
 
     @classmethod
     def compute_hash(cls, token_ids: list[int], prefix: int = -1):
@@ -48,37 +48,45 @@ class BlockManager:
         self.used_block_ids.add(block_id)
         return self.blocks[block_id]
 
-    def _deallocate_block(self, block_id: int) -> Block:
+    def _deallocate_block(self, block_id: int) -> Block: # the existing hash mapping still exists
         assert self.blocks[block_id].ref_count == 0
         self.used_block_ids.remove(block_id)
         self.free_block_ids.append(block_id)
 
     def can_allocate(self, seq: Sequence) -> bool:
         return len(self.free_block_ids) >= seq.num_blocks
-
+    #! Initial Allocation (Prefill) with prefix cache
     def allocate(self, seq: Sequence):
         assert not seq.block_table
         h = -1
         cache_miss = False
-        for i in range(seq.num_blocks):
-            token_ids = seq.block(i)
+        for i in range(seq.num_blocks): # needed blocks
+            token_ids = seq.block(i) # token_ids list of current block
+            # compute hash for a full block
             h = self.compute_hash(token_ids, h) if len(token_ids) == self.block_size else -1
+            #* check cache (prefix caching)
             block_id = self.hash_to_block_id.get(h, -1)
             if block_id == -1 or self.blocks[block_id].token_ids != token_ids:
                 cache_miss = True
+            #* cache miss -> new block
             if cache_miss:
                 block_id = self.free_block_ids[0]
-                block = self._allocate_block(block_id)
+                block = self._allocate_block(block_id) # mark as used
+            #* cache hit
             else:
                 seq.num_cached_tokens += self.block_size
-                if block_id in self.used_block_ids:
+                if block_id in self.used_block_ids: # Active Shared Block
                     block = self.blocks[block_id]
                     block.ref_count += 1
-                else:
+                else: 
+                    #* Resurrected Block:
+                    # the block_id is deallocated to free but the data is not reset
                     block = self._allocate_block(block_id)
+            # this is for new blocks and these resurrected blocks
             if h != -1:
-                block.update(h, token_ids)
+                block.update(h, token_ids) # update hash value and token_ids of block
                 self.hash_to_block_id[h] = block_id
+            
             seq.block_table.append(block_id)
 
     def deallocate(self, seq: Sequence):
@@ -92,21 +100,27 @@ class BlockManager:
 
     def can_append(self, seq: Sequence) -> bool:
         return len(self.free_block_ids) >= (len(seq) % self.block_size == 1)
-
+    #! Incremental Allocation (Decoding)
     def may_append(self, seq: Sequence):
         block_table = seq.block_table
         last_block = self.blocks[block_table[-1]]
+
+        #* this new generated token would be allocated to a new block
         if len(seq) % self.block_size == 1:
             assert last_block.hash != -1
             block_id = self.free_block_ids[0]
             self._allocate_block(block_id)
             block_table.append(block_id)
+        
+        #* this new token make the block full
         elif len(seq) % self.block_size == 0:
             assert last_block.hash == -1
-            token_ids = seq.block(seq.num_blocks-1)
-            prefix = self.blocks[block_table[-2]].hash if len(block_table) > 1 else -1
-            h = self.compute_hash(token_ids, prefix)
+            token_ids = seq.block(seq.num_blocks-1) # token_ids: list
+            prefix = self.blocks[block_table[-2]].hash if len(block_table) > 1 else -1 # gain prefix
+            h = self.compute_hash(token_ids, prefix) # main prefix caching
             last_block.update(h, token_ids)
             self.hash_to_block_id[h] = last_block.block_id
+        
+        #* add to the last block
         else:
             assert last_block.hash == -1

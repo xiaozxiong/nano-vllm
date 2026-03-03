@@ -33,7 +33,7 @@ class Scheduler:
                 break
             # waiting -> running
             num_seqs += 1
-            self.block_manager.allocate(seq)
+            self.block_manager.allocate(seq) #!
             num_batched_tokens += len(seq) - seq.num_cached_tokens
             seq.status = SequenceStatus.RUNNING
             self.waiting.popleft()
@@ -56,8 +56,8 @@ class Scheduler:
                     self.preempt(seq)
                     break
             else:
-                num_seqs += 1
-                self.block_manager.may_append(seq)
+                num_seqs += 1 #!
+                self.block_manager.may_append(seq) #!
                 scheduled_seqs.append(seq)
         assert scheduled_seqs
         # reverse scheduled seqs and put them in queue top

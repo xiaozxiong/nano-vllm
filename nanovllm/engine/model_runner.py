@@ -186,6 +186,7 @@ class ModelRunner:
             num_kv_heads,
             head_dim,
         )
+        #* binding
         # assign kv cache
         layer_id = 0
         # Iterate over all modules
@@ -246,10 +247,10 @@ class ModelRunner:
                     end = start + self.block_size
                 else:
                     end = start + seq.last_block_num_tokens
-                # Add these physical addresses to the mapping
+                # Add these physical addresses to the mapping, locally continuous
                 slot_mapping.extend(list(range(start, end)))
         
-        if cu_seqlens_k[-1] > cu_seqlens_q[-1]:  # prefix cache exists
+        if cu_seqlens_k[-1] > cu_seqlens_q[-1]:  #* prefix cache exists
             block_tables = self.prepare_block_tables(seqs)
         
         input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(
@@ -267,7 +268,7 @@ class ModelRunner:
         slot_mapping = torch.tensor(
             slot_mapping, dtype=torch.int32, pin_memory=True
         ).cuda(non_blocking=True)
-        # metadata for attention computation
+        #* metadata for attention computation, global variation
         set_context(
             True,
             cu_seqlens_q,
